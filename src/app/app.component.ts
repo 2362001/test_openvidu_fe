@@ -52,24 +52,37 @@ export class AppComponent implements OnDestroy {
         this.configureUrls(); // Suy ra URL theo môi trường
     }
 
+    // private configureUrls() {
+    //     // URL server ứng dụng (Spring/Node) dùng để cấp token LiveKit
+    //     if (!APPLICATION_SERVER_URL) {
+    //         if (window.location.hostname === 'localhost') {
+    //             APPLICATION_SERVER_URL = 'http://localhost:6080/'; // dev
+    //         } else {
+    //             APPLICATION_SERVER_URL = 'https://' + window.location.hostname + ':6443/'; // ví dụ khi bạn dùng SSL trên 6443
+    //         }
+    //     }
+    //     // URL LiveKit (WS/WSS)
+    //     if (!LIVEKIT_URL) {
+    //         if (window.location.hostname === 'localhost') {
+    //             LIVEKIT_URL = 'ws://localhost:7880'; // cổng mặc định LiveKit dev (không TLS)
+    //         } else {
+    //             LIVEKIT_URL = 'wss://' + window.location.hostname + ':7881'; // cổng mặc định LiveKit TLS
+    //             // nếu đã reverse proxy qua 443 thì có thể dùng: LIVEKIT_URL = 'wss://' + window.location.hostname;
+    //         }
+    //     }
+    // }
+
     private configureUrls() {
-        // URL server ứng dụng (Spring/Node) dùng để cấp token LiveKit
-        if (!APPLICATION_SERVER_URL) {
-            if (window.location.hostname === 'localhost') {
-                APPLICATION_SERVER_URL = 'http://localhost:6080/'; // dev
-            } else {
-                APPLICATION_SERVER_URL = 'https://' + window.location.hostname + ':6443/'; // ví dụ khi bạn dùng SSL trên 6443
-            }
-        }
-        // URL LiveKit (WS/WSS)
-        if (!LIVEKIT_URL) {
-            if (window.location.hostname === 'localhost') {
-                LIVEKIT_URL = 'ws://localhost:7880'; // cổng mặc định LiveKit dev (không TLS)
-            } else {
-                LIVEKIT_URL = 'wss://' + window.location.hostname + ':7881'; // cổng mặc định LiveKit TLS
-                // nếu đã reverse proxy qua 443 thì có thể dùng: LIVEKIT_URL = 'wss://' + window.location.hostname;
-            }
-        }
+        // ⛳️ Dùng LAN IP của máy bạn: 10.145.31.185
+        // Backend Spring Boot (cấp token)
+        APPLICATION_SERVER_URL = 'http://192.168.137.1:6080/';
+
+        // LiveKit (dev, không TLS)
+        LIVEKIT_URL = 'ws://192.168.137.1:7880';
+
+        // Nếu sau này bạn bật TLS + reverse proxy:
+        // APPLICATION_SERVER_URL = 'https://your-domain/'; // proxy -> Spring
+        // LIVEKIT_URL = 'wss://your-domain';               // proxy -> LiveKit
     }
 
     // --------- State cho chat (DataChannel) ---------
@@ -164,6 +177,8 @@ export class AppComponent implements OnDestroy {
             await this.leaveRoom(); // dọn dẹp nếu lỗi
         }
     }
+
+    //test thử
 
     // --------- Gửi chat qua DataChannel (reliable) ---------
     async sendMessage() {
