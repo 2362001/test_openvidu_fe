@@ -10,7 +10,8 @@ import {
     RemoteTrackPublication,
     Room, // Đối tượng “phòng” của LiveKit
     RoomEvent, // Enum các sự kiện trong Room
-    Track, // Để truy cập Track.Source.ScreenShare
+    Track,
+    VideoPresets, // Để truy cập Track.Source.ScreenShare
 } from 'livekit-client';
 import { lastValueFrom } from 'rxjs';
 import { AudioComponent } from './audio/audio.component';
@@ -106,7 +107,7 @@ export class AppComponent implements OnDestroy {
         room.on(
             RoomEvent.TrackSubscribed,
             (_track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) => {
-                // Lưu audio track để phát (bạn đã có AudioComponent)
+                // audio
                 if (publication.kind === 'audio') {
                     this.remoteTracksMap.update((map) => {
                         map.set(publication.trackSid, {
@@ -116,8 +117,15 @@ export class AppComponent implements OnDestroy {
                         return map;
                     });
                 }
-                // Lưu video share màn hình để hiển thị
-                if (publication.kind === 'video' && publication.source === Track.Source.ScreenShare) {
+
+                // ✅ video: nhận cả Camera & ScreenShare (+ fallback Unknown)
+                if (
+                    publication.kind === 'video' &&
+                    (publication.source === Track.Source.Camera ||
+                        publication.source === Track.Source.ScreenShare ||
+                        publication.source === Track.Source.Unknown || // đôi lúc SDK để Unknown
+                        publication.source === (undefined as any))
+                ) {
                     this.remoteTracksMap.update((map) => {
                         map.set(publication.trackSid, {
                             trackPublication: publication,
@@ -171,7 +179,7 @@ export class AppComponent implements OnDestroy {
 
             // 4) Audio-only: tắt camera, bật mic (có thể đổi theo nhu cầu)
             await room.localParticipant.setCameraEnabled(false);
-            await room.localParticipant.setMicrophoneEnabled(true);
+            await room.localParticipant.setMicrophoneEnabled(false);
         } catch (error: any) {
             console.log('Error connecting:', error?.error?.errorMessage || error?.message || error);
             await this.leaveRoom(); // dọn dẹp nếu lỗi
@@ -230,48 +238,16 @@ export class AppComponent implements OnDestroy {
 
     // Bật/tắt chia sẻ màn hình
     async toggleScreenShare() {
-        const r = this.room();
-        if (!r) return;
-
+        if (!this.room()) return;
         try {
-            // --------- Bật share ---------
             if (!this.isScreenSharing) {
-                // Tạo track chia sẻ màn hình.
-                // audio: true -> thử kèm audio hệ thống/tab (tùy browser/OS/HTTPS)
-                const tracks = await createLocalScreenTracks({
-                    audio: true,
-                });
-
-                // Lưu lại các track local để unpublish/stop về sau
-                this.screenShareTracks = tracks as LocalTrack[];
-
-                // Publish tất cả track (thường có 1 video; có thể có 1 audio share)
-                for (const t of this.screenShareTracks) {
-                    await r.localParticipant.publishTrack(t);
-
-                    // Khi người dùng bấm "Stop sharing" ở UI trình duyệt,
-                    // MediaStreamTrack sẽ phát 'ended' -> ta dọn dẹp ứng dụng
-                    const mst = (t as LocalVideoTrack).mediaStreamTrack ?? (t as any).mediaStreamTrack;
-                    if (mst) {
-                        mst.addEventListener(
-                            'ended',
-                            async () => {
-                                await this.stopScreenShare();
-                            },
-                            { once: true } // chỉ cần lắng nghe 1 lần
-                        );
-                    }
-                }
-
-                this.isScreenSharing = true;
-            }
-            // --------- Tắt share ---------
-            else {
+                const ok = await this.startScreenShare(true);
+                if (!ok) console.warn('Screen share could not start');
+            } else {
                 await this.stopScreenShare();
             }
         } catch (e) {
             console.error('Screen share error', e);
-            // (gợi ý) Có thể hiển thị toast cho user về quyền truy cập màn hình/HTTPS
         }
     }
 
@@ -293,5 +269,117 @@ export class AppComponent implements OnDestroy {
 
         this.screenShareTracks = [];
         this.isScreenSharing = false;
+    }
+
+    // state thêm:
+    isCameraOn = false;
+    camAndShare = false;
+
+    // refactor: tách startScreenShare() để tái dùng
+    private async startScreenShare(audio = true) {
+        const r = this.room();
+        if (!r) return false;
+
+        try {
+            const tracks = await createLocalScreenTracks({ audio }); // audio hệ thống tùy browser/HTTPS
+            this.screenShareTracks = tracks as LocalTrack[];
+
+            for (const t of this.screenShareTracks) {
+                await r.localParticipant.publishTrack(t);
+
+                // auto-stop khi user bấm "Stop sharing" trên UI của trình duyệt
+                const mst = (t as LocalVideoTrack).mediaStreamTrack ?? (t as any).mediaStreamTrack;
+                if (mst) {
+                    mst.addEventListener(
+                        'ended',
+                        async () => {
+                            await this.stopScreenShare();
+                            // nếu đang ở chế độ combo, cập nhật cờ
+                            if (this.camAndShare) this.camAndShare = this.isCameraOn && this.isScreenSharing;
+                        },
+                        { once: true }
+                    );
+                }
+            }
+
+            this.isScreenSharing = true;
+            return true;
+        } catch (e) {
+            console.error('startScreenShare failed', e);
+            return false;
+        }
+    }
+
+    async toggleCamAndShare() {
+        const r = this.room();
+        if (!r) return;
+
+        try {
+            if (!this.camAndShare) {
+                // BẬT CAMERA (thử trước camera trước, rồi fallback camera sau)
+                this.isCameraOn = false;
+                try {
+                    await r.localParticipant.setCameraEnabled(true, {
+                        facingMode: 'user' as any,
+                        resolution: VideoPresets.h540,
+                    });
+                    this.isCameraOn = true;
+                } catch (e1) {
+                    console.warn('Front cam failed, try back cam', e1);
+                    try {
+                        await r.localParticipant.setCameraEnabled(true, {
+                            facingMode: 'environment' as any,
+                            resolution: VideoPresets.h540,
+                        });
+                        this.isCameraOn = true;
+                    } catch (e2) {
+                        console.error('Camera failed, continue without video', e2);
+                        // KHÔNG leave room; chỉ không có camera
+                        this.isCameraOn = false;
+                    }
+                }
+
+                // BẬT SCREEN SHARE (nếu chưa bật)
+                if (!this.isScreenSharing) {
+                    // nếu đang HTTP trên IP, audio hệ thống thường fail -> có thể để false
+                    const ok = await this.startScreenShare(true /* hoặc false nếu gặp lỗi */);
+                    if (!ok) console.warn('Could not start screen share');
+                }
+
+                this.camAndShare = this.isCameraOn || this.isScreenSharing;
+            } else {
+                // TẮT CẢ HAI
+                if (this.isCameraOn) {
+                    try {
+                        await r.localParticipant.setCameraEnabled(false);
+                    } catch {}
+                    this.isCameraOn = false;
+                }
+                if (this.isScreenSharing) await this.stopScreenShare();
+
+                this.camAndShare = false;
+            }
+        } catch (e) {
+            console.error('toggleCamAndShare error', e);
+        }
+    }
+
+    currentFacing: 'user' | 'environment' = 'user';
+
+    async flipCamera() {
+        const r = this.room();
+        if (!r) return;
+
+        const next = this.currentFacing === 'user' ? 'environment' : 'user';
+        try {
+            await r.localParticipant.setCameraEnabled(false);
+            await r.localParticipant.setCameraEnabled(true, {
+                facingMode: next,
+                resolution: VideoPresets.h540, // preset nhẹ cho mobile
+            });
+            this.currentFacing = next;
+        } catch (e) {
+            console.error('flipCamera failed', e);
+        }
     }
 }

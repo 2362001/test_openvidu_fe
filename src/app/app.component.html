@@ -23,6 +23,10 @@
     <div id="room-header">
         <h2 id="room-title">{{ roomForm.value.roomName }}</h2>
         <div class="header-actions">
+            <button class="btn btn-primary" (click)="toggleCamAndShare()" [disabled]="!room()">
+                {{ camAndShare ? "Stop Cam + Share" : "Start Cam + Share" }}
+            </button>
+            <button class="btn btn-outline-primary" (click)="flipCamera()" [disabled]="!room()">Flip Cam</button>
             <button class="btn btn-secondary" (click)="toggleScreenShare()" [disabled]="!room()">
                 {{ isScreenSharing ? "Stop Share" : "Share Screen" }}
             </button>
