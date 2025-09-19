@@ -77,7 +77,6 @@ export class AppComponent implements OnDestroy {
             const from = participant?.name || participant?.identity || 'Unknown';
             this.messages.update((list) => [...list, { from, text }]);
         });
-
         // Nhận track remote (chỉ quan tâm audio)
         room.on(
             RoomEvent.TrackSubscribed,

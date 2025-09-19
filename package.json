@@ -2,7 +2,7 @@
   "name": "basic-angular",
   "version": "1.0.0",
   "scripts": {
-    "start": "ng serve --port=5080 --host=0.0.0.0 --disable-host-check",
+    "start": "ng serve --live-reload false --port=5080 --host=0.0.0.0 --disable-host-check",
     "build": "ng build"
   },
   "private": true,
