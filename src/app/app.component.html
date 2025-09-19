@@ -22,54 +22,64 @@
 <div id="room">
     <div id="room-header">
         <h2 id="room-title">{{ roomForm.value.roomName }}</h2>
-        <button class="btn btn-secondary" (click)="toggleScreenShare()" [disabled]="!room()">
-            {{ isScreenSharing ? "Stop Share" : "Share Screen" }}
-        </button>
-        <button class="btn btn-danger" id="leave-room-button" (click)="leaveRoom()">Leave Room</button>
+        <div class="header-actions">
+            <button class="btn btn-secondary" (click)="toggleScreenShare()" [disabled]="!room()">
+                {{ isScreenSharing ? "Stop Share" : "Share Screen" }}
+            </button>
+            <button class="btn btn-danger" id="leave-room-button" (click)="leaveRoom()">Leave Room</button>
+        </div>
     </div>
 
-    <!-- Danh sách người trong phòng -->
-    <div id="participants" class="mt-2">
-        @for (p of participants(); track p) {
-        <span class="badge bg-secondary me-2">{{ p }}</span>
-        }
-    </div>
-
-    <div id="chat-box" class="mt-3">
-        <h4>Chat</h4>
-        <div id="chat-messages" style="height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 8px">
-            @for (msg of messages(); track $index) {
-            <div>
-                <b>{{ msg.from }}:</b> {{ msg.text }}
+    <div id="content">
+        <!-- NEW: khối 2 cột -->
+        <!-- Cột trái: participants + video/screen share -->
+        <div id="left-pane">
+            <!-- Danh sách người trong phòng -->
+            <div id="participants" class="mt-2">
+                @for (p of participants(); track p) {
+                <span class="badge bg-secondary me-2">{{ p }}</span>
+                }
             </div>
-            }
+
+            <!-- Lưới video/screen share -->
+            <div id="layout-container">
+                @for (remoteTrack of remoteTracksMap().values(); track remoteTrack.trackPublication.trackSid) { @if
+                (remoteTrack.trackPublication.kind === 'audio') {
+                <audio-component [track]="remoteTrack.trackPublication.audioTrack!"></audio-component>
+                } @else if (remoteTrack.trackPublication.kind === 'video') {
+                <video-component
+                    [track]="remoteTrack.trackPublication.videoTrack!"
+                    [participantIdentity]="remoteTrack.participantIdentity"
+                    [local]="false"
+                >
+                </video-component>
+                } }
+            </div>
         </div>
 
-        <form (ngSubmit)="sendMessage()" style="margin-top: 8px">
-            <input
-                type="text"
-                class="form-control"
-                [(ngModel)]="chatInput"
-                name="chatInput"
-                placeholder="Type a message..."
-                required
-            />
-            <button type="submit" class="btn btn-primary mt-2">Send</button>
-        </form>
-    </div>
+        <!-- Cột phải: Chat -->
+        <aside id="chat-panel">
+            <h4>Chat</h4>
+            <div id="chat-messages">
+                @for (msg of messages(); track $index) {
+                <div class="chat-line">
+                    <b>{{ msg.from }}:</b> {{ msg.text }}
+                </div>
+                }
+            </div>
 
-    <div id="layout-container">
-        @for (remoteTrack of remoteTracksMap().values(); track remoteTrack.trackPublication.trackSid) { @if
-        (remoteTrack.trackPublication.kind === 'audio') {
-        <audio-component [track]="remoteTrack.trackPublication.audioTrack!"></audio-component>
-        } @else if (remoteTrack.trackPublication.kind === 'video') {
-        <video-component
-            [track]="remoteTrack.trackPublication.videoTrack!"
-            [participantIdentity]="remoteTrack.participantIdentity"
-            [local]="false"
-        >
-        </video-component>
-        } }
+            <form (ngSubmit)="sendMessage()" id="chat-form">
+                <input
+                    type="text"
+                    class="form-control"
+                    [(ngModel)]="chatInput"
+                    name="chatInput"
+                    placeholder="Type a message..."
+                    required
+                />
+                <button type="submit" class="btn btn-primary mt-2">Send</button>
+            </form>
+        </aside>
     </div>
 </div>
 }

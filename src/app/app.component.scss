@@ -75,60 +75,85 @@
     align-items: center;
 }
 
-#room-header {
+/* Header: căn phải nút */
+#room-header .header-actions {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    gap: 10px;
+}
+
+/* NEW: vùng nội dung 2 cột */
+#content {
+    display: grid;
+    grid-template-columns: 1fr 340px; /* trái co giãn, phải cố định 340px */
+    gap: 16px;
     width: 100%;
-    max-width: 1000px;
-    padding: 0 20px;
-    margin-bottom: 20px;
+    max-width: 1200px;
+    align-items: start;
 }
 
-#room-title {
-    font-size: 2em;
-    font-weight: bold;
-    margin: 0;
+/* Cột trái */
+#left-pane {
+    min-width: 0; /* tránh overflow khi dùng grid */
 }
 
+/* Lưới video/screen share */
 #layout-container {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 10px;
     justify-content: center;
     align-items: center;
     width: 100%;
-    max-width: 1000px;
     height: 100%;
 }
 
-/* Media Queries */
-@media screen and (max-width: 768px) {
-    #join-dialog {
-        width: 90%;
-        padding: 30px;
-    }
+/* Cột phải (chat) */
+#chat-panel {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 12px;
+    background: #fff;
+    position: sticky; /* bám theo khi cuộn */
+    top: 12px;
+    max-height: calc(100vh - 120px); /* giới hạn theo chiều cao viewport */
+    display: flex;
+    flex-direction: column;
+}
 
-    #join-dialog h2 {
-        font-size: 50px;
-    }
+#chat-messages {
+    flex: 1; /* chiếm hết phần còn lại */
+    overflow-y: auto;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    padding: 8px;
+    margin-bottom: 8px;
+}
 
-    #layout-container {
-        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+.chat-line {
+    margin-bottom: 6px;
+}
+
+#chat-form {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Responsive */
+@media screen and (max-width: 992px) {
+    #content {
+        grid-template-columns: 1fr 300px; /* thu hẹp panel chat */
     }
 }
 
-@media screen and (max-width: 480px) {
-    #join-dialog {
-        width: 100%;
-        padding: 20px;
+@media screen and (max-width: 768px) {
+    #content {
+        grid-template-columns: 1fr; /* stack theo chiều dọc */
     }
-
-    #join-dialog h2 {
-        font-size: 40px;
+    #chat-panel {
+        position: static; /* bỏ sticky trên màn nhỏ */
+        max-height: none;
     }
-
     #layout-container {
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     }
 }

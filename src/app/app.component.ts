@@ -33,7 +33,7 @@ let LIVEKIT_URL = '';
     standalone: true,
     imports: [ReactiveFormsModule, AudioComponent, FormsModule, VideoComponent],
     templateUrl: './app.component.html',
-    styleUrl: './app.component.css',
+    styleUrl: './app.component.scss',
 })
 export class AppComponent implements OnDestroy {
     // --------- Form nhập tên phòng và tên người dùng ---------
@@ -144,7 +144,7 @@ export class AppComponent implements OnDestroy {
 
         try {
             const roomName = this.roomForm.value.roomName!;
-            const participantName = this.roomForm.value.participantName!;
+            const participantName = this.roomForm.value.participantName! + '-' + Math.floor(Math.random() * 10000);
 
             // 1) Lấy JWT token từ backend để join room (role/grants đã set ở server)
             const token = await this.getToken(roomName, participantName);

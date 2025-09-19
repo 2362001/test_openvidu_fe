@@ -5,7 +5,7 @@ import { LocalVideoTrack, RemoteVideoTrack, VideoTrack } from 'livekit-client';
   selector: 'video-component',
   standalone: true,
   templateUrl: './video.component.html',
-  styleUrl: './video.component.css',
+  styleUrl: './video.component.scss',
 })
 export class VideoComponent implements AfterViewInit, OnDestroy {
   videoElement = viewChild<ElementRef<HTMLVideoElement>>('videoElement');
