@@ -425,43 +425,198 @@ export class AppComponent implements OnDestroy {
     }
 
     // bắt đầu ghi: bạn chọn preset (localOnly | localPlusRemote | onlyScreenShare ...)
+    // async startRecording(preset: 'localOnly' | 'localPlusRemote' | 'screenShare' = 'localOnly') {
+    //     if (this.isRecording) return;
+    //     const pieces: MediaStreamTrack[] = [];
+
+    //     if (preset === 'localOnly' || preset === 'localPlusRemote') {
+    //         const cam = this.getLocalCamMediaTrack();
+    //         const mic = this.getLocalMicMediaTrack();
+    //         if (cam) pieces.push(cam);
+    //         if (mic) pieces.push(mic);
+    //     }
+
+    //     if (preset === 'localPlusRemote') {
+    //         // thêm tất cả remote tracks hiện có (cẩn thận echo)
+    //         // Nếu muốn chỉ lấy remote video (không audio) thì lọc ở đây
+    //         const remotes = this.getRemoteMediaTracks();
+    //         pieces.push(...remotes);
+    //     }
+
+    //     if (preset === 'screenShare') {
+    //         // 1) nếu chưa share thì bật share ngay
+    //         if (!this.isScreenSharing) {
+    //             const ok = await this.startScreenShare(true); // audio hệ thống nếu browser cho (HTTPS/localhost)
+    //             if (!ok) {
+    //                 this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Không bật được Screen Share.' }]);
+    //                 return;
+    //             }
+    //         }
+
+    //         // 2) lấy trực tiếp từ this.screenShareTracks (đã được createLocalScreenTracks)
+    //         for (const t of this.screenShareTracks) {
+    //             const mst: MediaStreamTrack | undefined =
+    //                 (t as any).mediaStreamTrack ?? (t as LocalVideoTrack).mediaStreamTrack;
+    //             if (mst) pieces.push(mst);
+    //         }
+
+    //         // 3) fallback cuối: tự xin getDisplayMedia để ghi riêng (không publish vào room)
+    //         if (pieces.length === 0) {
+    //             try {
+    //                 const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    //                 stream.getTracks().forEach((tr) => pieces.push(tr));
+    //             } catch (e) {
+    //                 this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Không thể lấy màn hình để ghi.' }]);
+    //                 return;
+    //             }
+    //         }
+    //     }
+
+    //     if (pieces.length === 0) {
+    //         this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Không có track nào để ghi.' }]);
+    //         return;
+    //     }
+
+    //     this.recordingStream = new MediaStream(pieces);
+
+    //     const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+    //         ? 'video/webm;codecs=vp9,opus'
+    //         : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+    //         ? 'video/webm;codecs=vp8,opus'
+    //         : 'video/webm';
+
+    //     this.recordedBlobs = [];
+    //     this.recorder = new MediaRecorder(this.recordingStream, { mimeType: mime, videoBitsPerSecond: 4_000_000 });
+
+    //     this.recorder.ondataavailable = (e) => {
+    //         if (e.data && e.data.size > 0) this.recordedBlobs.push(e.data);
+    //     };
+    //     this.recorder.onstop = () => {
+    //         const blob = new Blob(this.recordedBlobs, { type: this.recorder?.mimeType || 'video/webm' });
+    //         const url = URL.createObjectURL(blob);
+    //         const a = document.createElement('a');
+    //         a.href = url;
+    //         const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    //         a.download = `record-${preset}-${ts}.webm`;
+    //         a.click();
+    //         setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    //     };
+
+    //     this.recorder.start(500); // collect chunks
+    //     this.isRecording = true;
+    //     this.messages.update((l) => [...l, { from: 'Hệ thống', text: `Bắt đầu ghi (${preset})` }]);
+    // }
+
     async startRecording(preset: 'localOnly' | 'localPlusRemote' | 'screenShare' = 'localOnly') {
         if (this.isRecording) return;
-        const pieces: MediaStreamTrack[] = [];
 
-        if (preset === 'localOnly' || preset === 'localPlusRemote') {
-            const cam = this.getLocalCamMediaTrack();
-            const mic = this.getLocalMicMediaTrack();
-            if (cam) pieces.push(cam);
-            if (mic) pieces.push(mic);
-        }
+        const videoTracks: MediaStreamTrack[] = [];
+        const audioTracksToMix: MediaStreamTrack[] = [];
 
-        if (preset === 'localPlusRemote') {
-            // thêm tất cả remote tracks hiện có (cẩn thận echo)
-            // Nếu muốn chỉ lấy remote video (không audio) thì lọc ở đây
-            const remotes = this.getRemoteMediaTracks();
-            pieces.push(...remotes);
-        }
-
+        // --- A) SCREEN SHARE ---
         if (preset === 'screenShare') {
-            // nếu bạn đang bật screen share local, lấy track của nó
-            // tìm trong local publications nguồn ScreenShare/ScreenShareAudio
-            const r = this.room();
-            const ssVideo = r?.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.videoTrack
-                ?.mediaStreamTrack;
-            const ssAudio = r?.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.audioTrack
-                ?.mediaStreamTrack;
-            if (ssVideo) pieces.push(ssVideo);
-            if (ssAudio) pieces.push(ssAudio);
+            // Bật share nếu chưa bật
+            if (!this.isScreenSharing) {
+                const ok = await this.startScreenShare(true /* yêu cầu audio nếu có thể */);
+                if (!ok) {
+                    this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Không bật được Screen Share.' }]);
+                    return;
+                }
+            }
+
+            // Lấy trực tiếp từ screenShareTracks do createLocalScreenTracks trả về
+            for (const t of this.screenShareTracks) {
+                const mst = (t as any).mediaStreamTrack;
+                if (!mst) continue;
+                if (mst.kind === 'video') videoTracks.push(mst);
+                if (mst.kind === 'audio') audioTracksToMix.push(mst);
+            }
+
+            // Fallback: nếu vì lý do nào đó không lấy được (hiếm), xin getDisplayMedia để ghi riêng tư
+            if (videoTracks.length === 0) {
+                try {
+                    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                    stream.getVideoTracks().forEach((v) => videoTracks.push(v));
+                    stream.getAudioTracks().forEach((a) => audioTracksToMix.push(a));
+                } catch {
+                    this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Không thể lấy màn hình để ghi.' }]);
+                    return;
+                }
+            }
+
+            // (Tuỳ chọn) trộn thêm MIC local hoặc remote audio cho file ghi
+            const wantMic = true; // đổi theo ý bạn
+            const wantRemote = false; // true nếu muốn trộn tiếng người khác vào file
+
+            if (wantMic) {
+                const micPub = this.room()?.localParticipant.getTrackPublication(Track.Source.Microphone);
+                const mic = micPub?.audioTrack?.mediaStreamTrack;
+                if (mic) audioTracksToMix.push(mic);
+            }
+            if (wantRemote) {
+                for (const info of this.remoteTracksMap().values()) {
+                    const at = info.trackPublication.audioTrack?.mediaStreamTrack;
+                    if (at) audioTracksToMix.push(at);
+                }
+            }
         }
 
-        if (pieces.length === 0) {
+        // --- B) LOCAL ONLY ---
+        if (preset === 'localOnly') {
+            const cam = this.localCamTrack()?.mediaStreamTrack;
+            if (cam) videoTracks.push(cam);
+            const micPub = this.room()?.localParticipant.getTrackPublication(Track.Source.Microphone);
+            const mic = micPub?.audioTrack?.mediaStreamTrack;
+            if (mic) audioTracksToMix.push(mic);
+        }
+
+        // --- C) LOCAL + REMOTE ---
+        if (preset === 'localPlusRemote') {
+            const cam = this.localCamTrack()?.mediaStreamTrack;
+            if (cam) videoTracks.push(cam);
+            const micPub = this.room()?.localParticipant.getTrackPublication(Track.Source.Microphone);
+            const mic = micPub?.audioTrack?.mediaStreamTrack;
+            if (mic) audioTracksToMix.push(mic);
+
+            // remote video (tuỳ chọn)
+            for (const info of this.remoteTracksMap().values()) {
+                const vt = info.trackPublication.videoTrack?.mediaStreamTrack;
+                if (vt) videoTracks.push(vt);
+                const at = info.trackPublication.audioTrack?.mediaStreamTrack;
+                if (at) audioTracksToMix.push(at);
+            }
+        }
+
+        if (videoTracks.length === 0 && audioTracksToMix.length === 0) {
             this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Không có track nào để ghi.' }]);
             return;
         }
 
-        this.recordingStream = new MediaStream(pieces);
+        // --- D) MIX tất cả audio -> 1 track duy nhất ---
+        let mixedAudioTrack: MediaStreamTrack | undefined;
+        if (audioTracksToMix.length > 0) {
+            const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const dest = ctx.createMediaStreamDestination();
 
+            // Kết mỗi audio track vào destination
+            for (const at of audioTracksToMix) {
+                try {
+                    const src = ctx.createMediaStreamSource(new MediaStream([at]));
+                    // (tuỳ chọn) có thể thêm GainNode để chỉnh âm lượng từng nguồn
+                    src.connect(dest);
+                } catch {
+                    // bỏ qua nếu browser không cho kết nối một số track đặc thù
+                }
+            }
+
+            const out = dest.stream.getAudioTracks()[0];
+            if (out) mixedAudioTrack = out;
+        }
+
+        // --- E) Tạo stream cho MediaRecorder ---
+        const finalStream = new MediaStream([...videoTracks, ...(mixedAudioTrack ? [mixedAudioTrack] : [])]);
+
+        // --- F) Ghi ---
         const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
             ? 'video/webm;codecs=vp9,opus'
             : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
@@ -469,23 +624,21 @@ export class AppComponent implements OnDestroy {
             : 'video/webm';
 
         this.recordedBlobs = [];
-        this.recorder = new MediaRecorder(this.recordingStream, { mimeType: mime, videoBitsPerSecond: 4_000_000 });
-
+        this.recorder = new MediaRecorder(finalStream, { mimeType: mime, videoBitsPerSecond: 4_000_000 });
         this.recorder.ondataavailable = (e) => {
-            if (e.data && e.data.size > 0) this.recordedBlobs.push(e.data);
+            if (e.data?.size) this.recordedBlobs.push(e.data);
         };
         this.recorder.onstop = () => {
             const blob = new Blob(this.recordedBlobs, { type: this.recorder?.mimeType || 'video/webm' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            const ts = new Date().toISOString().replace(/[:.]/g, '-');
-            a.download = `record-${preset}-${ts}.webm`;
+            a.download = `record-${preset}-${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
             a.click();
-            setTimeout(() => URL.revokeObjectURL(url), 10_000);
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
         };
 
-        this.recorder.start(500); // collect chunks
+        this.recorder.start(500);
         this.isRecording = true;
         this.messages.update((l) => [...l, { from: 'Hệ thống', text: `Bắt đầu ghi (${preset})` }]);
     }
