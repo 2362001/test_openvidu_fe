@@ -75,6 +75,10 @@
     align-items: center;
 }
 
+.video-container.local video {
+    transform: scaleX(-1); /* mirror */
+}
+
 /* Header: căn phải nút */
 #room-header .header-actions {
     display: flex;

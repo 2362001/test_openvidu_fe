@@ -2,228 +2,248 @@ import { HttpClient } from '@angular/common/http';
 import { Component, HostListener, OnDestroy, signal } from '@angular/core';
 import { FormControl, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import {
-    createLocalScreenTracks, // API LiveKit tạo track chia sẻ màn hình (video + optional audio)
-    LocalTrack, // Kiểu track local (audio/video)
-    LocalVideoTrack, // Kiểu track local video (để lấy mediaStreamTrack và listen 'ended')
+    createLocalScreenTracks,
+    LocalTrack,
+    LocalVideoTrack,
     RemoteParticipant,
     RemoteTrack,
     RemoteTrackPublication,
-    Room, // Đối tượng “phòng” của LiveKit
-    RoomEvent, // Enum các sự kiện trong Room
+    Room,
+    RoomEvent,
     Track,
-    VideoPresets, // Để truy cập Track.Source.ScreenShare
+    VideoPresets,
 } from 'livekit-client';
 import { lastValueFrom } from 'rxjs';
 import { AudioComponent } from './audio/audio.component';
 import { VideoComponent } from './video/video.component';
+import { CommonModule } from '@angular/common';
 
-// --------- Kiểu dữ liệu lưu trong remoteTracksMap ---------
-// Lưu publication (audio/video) + danh tính participant chủ sở hữu
 type TrackInfo = {
     trackPublication: RemoteTrackPublication;
     participantIdentity: string;
 };
 
-// --------- Cấu hình endpoint backend và LiveKit ---------
-// Để trống -> sẽ tự suy ra trong runtime ở this.configureUrls()
 let APPLICATION_SERVER_URL = '';
 let LIVEKIT_URL = '';
 
 @Component({
     selector: 'app-root',
     standalone: true,
-    imports: [ReactiveFormsModule, AudioComponent, FormsModule, VideoComponent],
+    imports: [ReactiveFormsModule, FormsModule, AudioComponent, VideoComponent, CommonModule],
     templateUrl: './app.component.html',
     styleUrl: './app.component.scss',
 })
 export class AppComponent implements OnDestroy {
-    // --------- Form nhập tên phòng và tên người dùng ---------
-    // Sử dụng Reactive Forms để có validate required
+    // ===== Form =====
     roomForm = new FormGroup({
         roomName: new FormControl('Test Room', Validators.required),
         participantName: new FormControl('Participant' + Math.floor(Math.random() * 100), Validators.required),
     });
 
-    // --------- State chính dùng Angular Signals ---------
-    room = signal<Room | undefined>(undefined); // Room hiện tại
-    remoteTracksMap = signal<Map<string, TrackInfo>>(new Map()); // Map<trackSid, TrackInfo> cho audio/screen-share
-    participants = signal<string[]>([]); // Danh sách participant (tên or identity)
+    // ===== Signals (state) =====
+    room = signal<Room | undefined>(undefined);
 
-    constructor(private httpClient: HttpClient) {
-        this.configureUrls(); // Suy ra URL theo môi trường
-    }
+    // IMPORTANT: luôn tạo Map mới khi update để trigger re-render
+    remoteTracksMap = signal<Map<string, TrackInfo>>(new Map());
 
-    // private configureUrls() {
-    //     // URL server ứng dụng (Spring/Node) dùng để cấp token LiveKit
-    //     if (!APPLICATION_SERVER_URL) {
-    //         if (window.location.hostname === 'localhost') {
-    //             APPLICATION_SERVER_URL = 'http://localhost:6080/'; // dev
-    //         } else {
-    //             APPLICATION_SERVER_URL = 'https://' + window.location.hostname + ':6443/'; // ví dụ khi bạn dùng SSL trên 6443
-    //         }
-    //     }
-    //     // URL LiveKit (WS/WSS)
-    //     if (!LIVEKIT_URL) {
-    //         if (window.location.hostname === 'localhost') {
-    //             LIVEKIT_URL = 'ws://localhost:7880'; // cổng mặc định LiveKit dev (không TLS)
-    //         } else {
-    //             LIVEKIT_URL = 'wss://' + window.location.hostname + ':7881'; // cổng mặc định LiveKit TLS
-    //             // nếu đã reverse proxy qua 443 thì có thể dùng: LIVEKIT_URL = 'wss://' + window.location.hostname;
-    //         }
-    //     }
-    // }
+    // hiển thị list tên nhanh (đơn giản) – có thể nâng cấp sang object identity/name nếu muốn
+    participants = signal<string[]>([]);
 
-    private configureUrls() {
-        // ⛳️ Dùng LAN IP của máy bạn: 10.145.31.185
-        // Backend Spring Boot (cấp token)
-        APPLICATION_SERVER_URL = 'http://192.168.137.1:6080/';
-
-        // LiveKit (dev, không TLS)
-        LIVEKIT_URL = 'ws://192.168.137.1:7880';
-
-        // Nếu sau này bạn bật TLS + reverse proxy:
-        // APPLICATION_SERVER_URL = 'https://your-domain/'; // proxy -> Spring
-        // LIVEKIT_URL = 'wss://your-domain';               // proxy -> LiveKit
-    }
-
-    // --------- State cho chat (DataChannel) ---------
+    // chat
     messages = signal<{ from: string; text: string }[]>([]);
     chatInput = '';
 
-    // --------- Join room: đăng ký các event + kết nối + bật mic ----------
+    // local cam track để render chính mình
+    localCamTrack = signal<LocalVideoTrack | undefined>(undefined);
+
+    // screen-share flags
+    isScreenSharing = false;
+    private screenShareTracks: LocalTrack[] = [];
+
+    // camera flags
+    isCameraOn = false;
+    camAndShare = false;
+    currentFacing: 'user' | 'environment' = 'user';
+
+    constructor(private httpClient: HttpClient) {
+        this.configureUrls();
+    }
+
+    private configureUrls() {
+        // DÙNG IP LAN/DOMAIN khi cần test đa thiết bị
+        APPLICATION_SERVER_URL = 'http://192.168.137.1:6080/';
+        LIVEKIT_URL = 'ws://192.168.137.1:7880';
+    }
+
+    // ====== Join Room ======
     async joinRoom() {
         const room = new Room();
         this.room.set(room);
 
-        // Nhận tin nhắn data (chat) từ các participant khác
-        room.on(RoomEvent.DataReceived, (payload, participant, _kind, _topic) => {
+        // DataChannel chat
+        room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
+            if (topic && topic !== 'chat') return;
             const text = new TextDecoder().decode(payload);
             const from = participant?.name || participant?.identity || 'Unknown';
             this.messages.update((list) => [...list, { from, text }]);
-            // (gợi ý) có thể auto-scroll hộp chat ở đây
         });
 
-        // Khi subscribe track remote (SDK đã đàm phán xong và track sẵn sàng)
+        // Remote tracks
         room.on(
             RoomEvent.TrackSubscribed,
             (_track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) => {
                 // audio
                 if (publication.kind === 'audio') {
-                    this.remoteTracksMap.update((map) => {
-                        map.set(publication.trackSid, {
+                    this.remoteTracksMap.update((prev) => {
+                        const next = new Map(prev);
+                        next.set(publication.trackSid, {
                             trackPublication: publication,
                             participantIdentity: participant.identity,
                         });
-                        return map;
+                        return next;
                     });
                 }
 
-                // ✅ video: nhận cả Camera & ScreenShare (+ fallback Unknown)
-                if (
+                // video (Camera/ScreenShare/Unknown)
+                const isRenderableVideo =
                     publication.kind === 'video' &&
-                    (publication.source === Track.Source.Camera ||
-                        publication.source === Track.Source.ScreenShare ||
-                        publication.source === Track.Source.Unknown || // đôi lúc SDK để Unknown
-                        publication.source === (undefined as any))
-                ) {
-                    this.remoteTracksMap.update((map) => {
-                        map.set(publication.trackSid, {
+                    [Track.Source.Camera, Track.Source.ScreenShare, Track.Source.Unknown].includes(
+                        (publication.source as Track.Source) ?? Track.Source.Unknown
+                    );
+
+                if (isRenderableVideo) {
+                    this.remoteTracksMap.update((prev) => {
+                        const next = new Map(prev);
+                        next.set(publication.trackSid, {
                             trackPublication: publication,
                             participantIdentity: participant.identity,
                         });
-                        return map;
+                        return next;
                     });
                 }
             }
         );
 
-        // Khi một remote publication bị hủy/không còn subscribe
         room.on(RoomEvent.TrackUnsubscribed, (_track: RemoteTrack, publication: RemoteTrackPublication) => {
-            this.remoteTracksMap.update((map) => {
-                map.delete(publication.trackSid);
-                return map;
+            this.remoteTracksMap.update((prev) => {
+                const next = new Map(prev);
+                next.delete(publication.trackSid);
+                return next;
             });
         });
 
-        // Cập nhật danh sách người tham gia khi có người ra/vào/đổi tên
+        // Participants in/out/name change + system message
         room.on(RoomEvent.ParticipantConnected, (p) => {
-            this.participants.update((list) => Array.from(new Set([...list, p.name || p.identity])));
+            const id = p.name || p.identity;
+            this.participants.update((list) => Array.from(new Set([...list, id])));
+            this.messages.update((list) => [...list, { from: 'Hệ thống', text: `${id} đã tham gia phòng` }]);
         });
         room.on(RoomEvent.ParticipantDisconnected, (p) => {
             const id = p.name || p.identity;
             this.participants.update((list) => list.filter((x) => x !== id));
+            this.messages.update((list) => [...list, { from: 'Hệ thống', text: `${id} đã rời phòng` }]);
         });
         room.on(RoomEvent.ParticipantNameChanged, (name, p) => {
             const id = p.identity;
             this.participants.update((list) => {
                 const next = list.slice();
-                const idx = next.findIndex((x) => x === id || x === (p.name || id));
-                if (idx !== -1) next[idx] = name || id;
+                const prevId = next.findIndex((x) => x === (p.name || id) || x === id);
+                if (prevId !== -1) next[prevId] = name || id;
                 return next;
             });
+        });
+
+        // Local camera published/unpublished -> đồng bộ localCamTrack signal
+        room.on(RoomEvent.LocalTrackPublished, (pub) => {
+            if (pub.kind === 'video' && pub.source === Track.Source.Camera) {
+                this.localCamTrack.set(pub.videoTrack as LocalVideoTrack);
+                this.isCameraOn = true;
+                this.recomputeCamShareFlags();
+            }
+        });
+        room.on(RoomEvent.LocalTrackUnpublished, (pub) => {
+            if (pub.kind === 'video' && pub.source === Track.Source.Camera) {
+                this.localCamTrack.set(undefined);
+                this.isCameraOn = false;
+                this.recomputeCamShareFlags();
+            }
         });
 
         try {
             const roomName = this.roomForm.value.roomName!;
             const participantName = this.roomForm.value.participantName! + '-' + Math.floor(Math.random() * 10000);
 
-            // 1) Lấy JWT token từ backend để join room (role/grants đã set ở server)
+            // 1) token
             const token = await this.getToken(roomName, participantName);
 
-            // 2) Kết nối LiveKit qua WS/WSS
+            // 2) connect
             await room.connect(LIVEKIT_URL, token);
 
-            // 3) Cập nhật danh sách người: self + những người đã ở trong phòng
+            // 3) participants list (self + existing)
             const existing = Array.from(room.remoteParticipants.values()).map((p) => p.name || p.identity);
             this.participants.set([participantName, ...existing]);
 
-            // 4) Audio-only: tắt camera, bật mic (có thể đổi theo nhu cầu)
-            await room.localParticipant.setCameraEnabled(false);
-            await room.localParticipant.setMicrophoneEnabled(false);
+            // 4) bật cam & mic theo mong muốn của bạn
+            await room.localParticipant.setCameraEnabled(true, {
+                facingMode: 'user' as any,
+                resolution: VideoPresets.h540,
+            });
+            await room.localParticipant.setMicrophoneEnabled(true);
+
+            // 5) set localCamTrack sau khi đã bật camera
+            const camPub = room.localParticipant.getTrackPublication(Track.Source.Camera);
+            const vt = camPub?.videoTrack as LocalVideoTrack | undefined;
+            this.localCamTrack.set(vt);
+            this.isCameraOn = !!vt;
+            this.recomputeCamShareFlags();
         } catch (error: any) {
             console.log('Error connecting:', error?.error?.errorMessage || error?.message || error);
-            await this.leaveRoom(); // dọn dẹp nếu lỗi
+            await this.leaveRoom();
         }
     }
 
-    //test thử
+    private recomputeCamShareFlags() {
+        this.camAndShare = this.isCameraOn || this.isScreenSharing;
+    }
 
-    // --------- Gửi chat qua DataChannel (reliable) ---------
+    // ===== Chat =====
     async sendMessage() {
         if (!this.chatInput.trim() || !this.room()) return;
-
         const msg = this.chatInput.trim();
         const data = new TextEncoder().encode(msg);
-
-        // publish dữ liệu đến mọi người trong phòng (reliable giống TCP)
-        await this.room()!.localParticipant.publishData(data, {
-            reliable: true,
-            // (gợi ý) có thể thêm topic: 'chat' để lọc theo chủ đề
-        });
-
-        // tự hiển thị tin nhắn của mình
+        await this.room()!.localParticipant.publishData(data, { reliable: true, topic: 'chat' });
         this.messages.update((list) => [...list, { from: 'Me', text: msg }]);
         this.chatInput = '';
     }
 
-    // --------- Rời phòng: nhớ dừng share nếu đang bật, sau đó disconnect ----------
+    // ===== Leave / cleanup =====
     async leaveRoom() {
-        if (this.isScreenSharing) {
-            await this.stopScreenShare();
-        }
-        await this.room()?.disconnect();
+        if (this.isScreenSharing) await this.stopScreenShare();
+        try {
+            await this.room()?.disconnect();
+        } catch {}
         this.room.set(undefined);
         this.remoteTracksMap.set(new Map());
         this.participants.set([]);
+        this.localCamTrack.set(undefined);
+        this.isCameraOn = false;
+        this.isScreenSharing = false;
+        this.camAndShare = false;
     }
 
-    // --------- Đảm bảo rời phòng khi đóng tab/reload ----------
-    @HostListener('window:beforeunload')
+    //đóng cửa sổ trình duyệt cần cancel hết
+    @HostListener('window:pagehide')
+    onPageHide() {
+        try {
+            this.room()?.disconnect();
+        } catch {}
+    }
+
     async ngOnDestroy() {
         await this.leaveRoom();
     }
 
-    // --------- Gọi backend lấy token LiveKit ----------
+    // ===== Backend token =====
     private async getToken(roomName: string, participantName: string): Promise<string> {
         const res = await lastValueFrom(
             this.httpClient.post<{ token: string }>(APPLICATION_SERVER_URL + 'token', { roomName, participantName })
@@ -231,12 +251,7 @@ export class AppComponent implements OnDestroy {
         return res.token;
     }
 
-    // ===================== Chia sẻ màn hình =====================
-
-    isScreenSharing = false; // cờ trạng thái share
-    private screenShareTracks: LocalTrack[] = []; // lưu chính các LocalTrack tạo bởi createLocalScreenTracks
-
-    // Bật/tắt chia sẻ màn hình
+    // ===== Screen Share =====
     async toggleScreenShare() {
         if (!this.room()) return;
         try {
@@ -251,58 +266,29 @@ export class AppComponent implements OnDestroy {
         }
     }
 
-    // Dừng chia sẻ: unpublish từng track và stop track local
-    private async stopScreenShare() {
-        const r = this.room();
-        if (!r) return;
-
-        for (const t of this.screenShareTracks) {
-            try {
-                // unpublish khỏi phòng (tham số thứ 2 = true: dừng track luôn)
-                r.localParticipant.unpublishTrack(t, true);
-                // vẫn gọi stop() để chắc chắn giải phóng camera/screen capturer
-                t.stop();
-            } catch {
-                // nuốt lỗi “nhỏ” để không chặn vòng lặp
-            }
-        }
-
-        this.screenShareTracks = [];
-        this.isScreenSharing = false;
-    }
-
-    // state thêm:
-    isCameraOn = false;
-    camAndShare = false;
-
-    // refactor: tách startScreenShare() để tái dùng
     private async startScreenShare(audio = true) {
         const r = this.room();
         if (!r) return false;
-
         try {
-            const tracks = await createLocalScreenTracks({ audio }); // audio hệ thống tùy browser/HTTPS
+            const tracks = await createLocalScreenTracks({ audio });
             this.screenShareTracks = tracks as LocalTrack[];
 
             for (const t of this.screenShareTracks) {
                 await r.localParticipant.publishTrack(t);
-
-                // auto-stop khi user bấm "Stop sharing" trên UI của trình duyệt
                 const mst = (t as LocalVideoTrack).mediaStreamTrack ?? (t as any).mediaStreamTrack;
                 if (mst) {
                     mst.addEventListener(
                         'ended',
                         async () => {
                             await this.stopScreenShare();
-                            // nếu đang ở chế độ combo, cập nhật cờ
-                            if (this.camAndShare) this.camAndShare = this.isCameraOn && this.isScreenSharing;
+                            this.recomputeCamShareFlags();
                         },
                         { once: true }
                     );
                 }
             }
-
             this.isScreenSharing = true;
+            this.recomputeCamShareFlags();
             return true;
         } catch (e) {
             console.error('startScreenShare failed', e);
@@ -310,13 +296,31 @@ export class AppComponent implements OnDestroy {
         }
     }
 
+    private async stopScreenShare() {
+        const r = this.room();
+        if (!r) return;
+        for (const t of this.screenShareTracks) {
+            try {
+                const media = (t as any).mediaStreamTrack as MediaStreamTrack | undefined;
+                if (media) {
+                    r.localParticipant.unpublishTrack(media, true);
+                } else {
+                    r.localParticipant.unpublishTrack(t, true);
+                }
+                t.stop();
+            } catch {}
+        }
+        this.screenShareTracks = [];
+        this.isScreenSharing = false;
+    }
+
+    // ===== Camera toggles =====
     async toggleCamAndShare() {
         const r = this.room();
         if (!r) return;
-
         try {
             if (!this.camAndShare) {
-                // BẬT CAMERA (thử trước camera trước, rồi fallback camera sau)
+                // Bật camera (front -> fallback back)
                 this.isCameraOn = false;
                 try {
                     await r.localParticipant.setCameraEnabled(true, {
@@ -334,37 +338,35 @@ export class AppComponent implements OnDestroy {
                         this.isCameraOn = true;
                     } catch (e2) {
                         console.error('Camera failed, continue without video', e2);
-                        // KHÔNG leave room; chỉ không có camera
                         this.isCameraOn = false;
                     }
                 }
 
-                // BẬT SCREEN SHARE (nếu chưa bật)
+                // Bật screen share nếu chưa bật
                 if (!this.isScreenSharing) {
-                    // nếu đang HTTP trên IP, audio hệ thống thường fail -> có thể để false
-                    const ok = await this.startScreenShare(true /* hoặc false nếu gặp lỗi */);
+                    const ok = await this.startScreenShare(true);
                     if (!ok) console.warn('Could not start screen share');
                 }
+                // sync localCamTrack
+                const camPub = r.localParticipant.getTrackPublication(Track.Source.Camera);
+                this.localCamTrack.set(camPub?.videoTrack as LocalVideoTrack | undefined);
 
-                this.camAndShare = this.isCameraOn || this.isScreenSharing;
+                this.recomputeCamShareFlags();
             } else {
-                // TẮT CẢ HAI
                 if (this.isCameraOn) {
                     try {
                         await r.localParticipant.setCameraEnabled(false);
                     } catch {}
                     this.isCameraOn = false;
+                    this.localCamTrack.set(undefined);
                 }
                 if (this.isScreenSharing) await this.stopScreenShare();
-
-                this.camAndShare = false;
+                this.recomputeCamShareFlags();
             }
         } catch (e) {
             console.error('toggleCamAndShare error', e);
         }
     }
-
-    currentFacing: 'user' | 'environment' = 'user';
 
     async flipCamera() {
         const r = this.room();
@@ -373,13 +375,132 @@ export class AppComponent implements OnDestroy {
         const next = this.currentFacing === 'user' ? 'environment' : 'user';
         try {
             await r.localParticipant.setCameraEnabled(false);
-            await r.localParticipant.setCameraEnabled(true, {
-                facingMode: next,
-                resolution: VideoPresets.h540, // preset nhẹ cho mobile
-            });
+            await r.localParticipant.setCameraEnabled(true, { facingMode: next, resolution: VideoPresets.h540 });
             this.currentFacing = next;
+
+            const camPub = r.localParticipant.getTrackPublication(Track.Source.Camera);
+            const vt = camPub?.videoTrack as LocalVideoTrack | undefined;
+
+            this.localCamTrack.set(vt);
+            this.isCameraOn = !!vt;
+            this.recomputeCamShareFlags();
         } catch (e) {
             console.error('flipCamera failed', e);
         }
+    }
+
+    // --- recording state ---
+    private recorder?: MediaRecorder;
+    private recordedBlobs: Blob[] = [];
+    private recordingStream?: MediaStream;
+
+    isRecording = false;
+
+    // tiện ích lấy audio/mic local
+    private getLocalMicMediaTrack(): MediaStreamTrack | undefined {
+        const r = this.room();
+        const micPub = r?.localParticipant.getTrackPublication(Track.Source.Microphone);
+        return micPub?.audioTrack?.mediaStreamTrack;
+    }
+
+    // tiện ích lấy video local
+    private getLocalCamMediaTrack(): MediaStreamTrack | undefined {
+        const vt = this.localCamTrack();
+        return vt?.mediaStreamTrack;
+    }
+
+    // tiện ích lấy MediaStreamTrack từ Remote publication (video/audio)
+    private getRemoteMediaTracks(): MediaStreamTrack[] {
+        const tracks: MediaStreamTrack[] = [];
+        for (const info of this.remoteTracksMap().values()) {
+            const pub = info.trackPublication;
+            if (pub.kind === 'video' && pub.videoTrack?.mediaStreamTrack) {
+                tracks.push(pub.videoTrack.mediaStreamTrack);
+            }
+            if (pub.kind === 'audio' && pub.audioTrack?.mediaStreamTrack) {
+                tracks.push(pub.audioTrack.mediaStreamTrack);
+            }
+        }
+        return tracks;
+    }
+
+    // bắt đầu ghi: bạn chọn preset (localOnly | localPlusRemote | onlyScreenShare ...)
+    async startRecording(preset: 'localOnly' | 'localPlusRemote' | 'screenShare' = 'localOnly') {
+        if (this.isRecording) return;
+        const pieces: MediaStreamTrack[] = [];
+
+        if (preset === 'localOnly' || preset === 'localPlusRemote') {
+            const cam = this.getLocalCamMediaTrack();
+            const mic = this.getLocalMicMediaTrack();
+            if (cam) pieces.push(cam);
+            if (mic) pieces.push(mic);
+        }
+
+        if (preset === 'localPlusRemote') {
+            // thêm tất cả remote tracks hiện có (cẩn thận echo)
+            // Nếu muốn chỉ lấy remote video (không audio) thì lọc ở đây
+            const remotes = this.getRemoteMediaTracks();
+            pieces.push(...remotes);
+        }
+
+        if (preset === 'screenShare') {
+            // nếu bạn đang bật screen share local, lấy track của nó
+            // tìm trong local publications nguồn ScreenShare/ScreenShareAudio
+            const r = this.room();
+            const ssVideo = r?.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.videoTrack
+                ?.mediaStreamTrack;
+            const ssAudio = r?.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.audioTrack
+                ?.mediaStreamTrack;
+            if (ssVideo) pieces.push(ssVideo);
+            if (ssAudio) pieces.push(ssAudio);
+        }
+
+        if (pieces.length === 0) {
+            this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Không có track nào để ghi.' }]);
+            return;
+        }
+
+        this.recordingStream = new MediaStream(pieces);
+
+        const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+            ? 'video/webm;codecs=vp9,opus'
+            : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+            ? 'video/webm;codecs=vp8,opus'
+            : 'video/webm';
+
+        this.recordedBlobs = [];
+        this.recorder = new MediaRecorder(this.recordingStream, { mimeType: mime, videoBitsPerSecond: 4_000_000 });
+
+        this.recorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) this.recordedBlobs.push(e.data);
+        };
+        this.recorder.onstop = () => {
+            const blob = new Blob(this.recordedBlobs, { type: this.recorder?.mimeType || 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            a.download = `record-${preset}-${ts}.webm`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        };
+
+        this.recorder.start(500); // collect chunks
+        this.isRecording = true;
+        this.messages.update((l) => [...l, { from: 'Hệ thống', text: `Bắt đầu ghi (${preset})` }]);
+    }
+
+    stopRecording() {
+        if (!this.isRecording || !this.recorder) return;
+        this.recorder.stop();
+        this.isRecording = false;
+
+        try {
+            // không stop các track gốc (vì chúng thuộc LiveKit); chỉ bỏ stream tạm
+            this.recordingStream?.getTracks().forEach((t) => this.recordingStream?.removeTrack(t));
+        } catch {}
+        this.recordingStream = undefined;
+        this.recorder = undefined;
+        this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Đã dừng ghi và tải file.' }]);
     }
 }

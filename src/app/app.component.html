@@ -26,7 +26,31 @@
             <button class="btn btn-primary" (click)="toggleCamAndShare()" [disabled]="!room()">
                 {{ camAndShare ? "Stop Cam + Share" : "Start Cam + Share" }}
             </button>
-            <button class="btn btn-outline-primary" (click)="flipCamera()" [disabled]="!room()">Flip Cam</button>
+            <!-- <button class="btn btn-outline-primary" (click)="flipCamera()" [disabled]="!room()">Flip Cam</button> -->
+            <button
+                class="btn btn-outline-success"
+                (click)="startRecording('localOnly')"
+                [disabled]="!room() || isRecording"
+            >
+                Record (Local)
+            </button>
+            <button
+                class="btn btn-outline-success"
+                (click)="startRecording('localPlusRemote')"
+                [disabled]="!room() || isRecording"
+            >
+                Record (Local + Remote)
+            </button>
+            <button
+                class="btn btn-outline-success"
+                (click)="startRecording('screenShare')"
+                [disabled]="!room() || isRecording"
+            >
+                Record (Screen)
+            </button>
+            <button class="btn btn-outline-danger" (click)="stopRecording()" [disabled]="!room() || !isRecording">
+                Stop Record
+            </button>
             <button class="btn btn-secondary" (click)="toggleScreenShare()" [disabled]="!room()">
                 {{ isScreenSharing ? "Stop Share" : "Share Screen" }}
             </button>
@@ -35,18 +59,26 @@
     </div>
 
     <div id="content">
-        <!-- NEW: khối 2 cột -->
-        <!-- Cột trái: participants + video/screen share -->
+        <!-- LEFT: participants + videos -->
         <div id="left-pane">
-            <!-- Danh sách người trong phòng -->
             <div id="participants" class="mt-2">
                 @for (p of participants(); track p) {
                 <span class="badge bg-secondary me-2">{{ p }}</span>
                 }
             </div>
 
-            <!-- Lưới video/screen share -->
             <div id="layout-container">
+                <!-- LOCAL VIDEO (mình) -->
+                @if (localCamTrack()) {
+                <video-component
+                    [track]="localCamTrack()!"
+                    [participantIdentity]="room()!.localParticipant.name ?? room()!.localParticipant.identity ?? 'me'"
+                    [local]="true"
+                >
+                </video-component>
+                }
+
+                <!-- REMOTE AUDIO/VIDEO -->
                 @for (remoteTrack of remoteTracksMap().values(); track remoteTrack.trackPublication.trackSid) { @if
                 (remoteTrack.trackPublication.kind === 'audio') {
                 <audio-component [track]="remoteTrack.trackPublication.audioTrack!"></audio-component>
@@ -55,19 +87,18 @@
                     [track]="remoteTrack.trackPublication.videoTrack!"
                     [participantIdentity]="remoteTrack.participantIdentity"
                     [local]="false"
-                >
-                </video-component>
+                ></video-component>
                 } }
             </div>
         </div>
 
-        <!-- Cột phải: Chat -->
+        <!-- RIGHT: Chat -->
         <aside id="chat-panel">
             <h4>Chat</h4>
             <div id="chat-messages">
                 @for (msg of messages(); track $index) {
-                <div class="chat-line">
-                    <b>{{ msg.from }}:</b> {{ msg.text }}
+                <div class="chat-line" [class.system-msg]="msg.from === 'Hệ thống'">
+                    <b *ngIf="msg.from !== 'Hệ thống'">{{ msg.from }}:</b> {{ msg.text }}
                 </div>
                 }
             </div>
