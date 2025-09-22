@@ -3,6 +3,7 @@ import { Component, HostListener, OnDestroy, signal } from '@angular/core';
 import { FormControl, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import {
     createLocalScreenTracks,
+    LocalAudioTrack,
     LocalTrack,
     LocalVideoTrack,
     RemoteParticipant,
@@ -65,30 +66,111 @@ export class AppComponent implements OnDestroy {
     camAndShare = false;
     currentFacing: 'user' | 'environment' = 'user';
 
+    // danh sách file đã nhận để hiển thị link tải
+    receivedFiles = signal<{ id: string; from: string; name: string; size: number; type: string; url: string }[]>([]);
+
+    // track tiến độ gửi/nhận (tuỳ chọn, để show progress)
+    transfers = new Map<
+        string,
+        {
+            name: string;
+            size: number;
+            type: string;
+            total: number;
+            received: number;
+            chunks: BlobPart[];
+            from: string;
+        }
+    >();
+
+    // chunk size phù hợp cho DataChannel
+    private readonly FILE_CHUNK = 16 * 1024; // 16KB
+
     constructor(private httpClient: HttpClient) {
         this.configureUrls();
     }
-
     private configureUrls() {
         // DÙNG IP LAN/DOMAIN khi cần test đa thiết bị
-        APPLICATION_SERVER_URL = 'http://192.168.137.1:6080/';
-        LIVEKIT_URL = 'ws://192.168.137.1:7880';
+        APPLICATION_SERVER_URL = 'http://127.0.0.1:6080/';
+        LIVEKIT_URL = 'ws://127.0.0.1:7880';
     }
 
-    // ====== Join Room ======
+    //region Join Room ======
     async joinRoom() {
         const room = new Room();
         this.room.set(room);
 
-        // DataChannel chat
+        // ===== DataChannel chat
+        // 1) meta
         room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
-            if (topic && topic !== 'chat') return;
-            const text = new TextDecoder().decode(payload);
-            const from = participant?.name || participant?.identity || 'Unknown';
-            this.messages.update((list) => [...list, { from, text }]);
+            // chat như cũ
+            if (!topic || topic === 'chat') {
+                const text = new TextDecoder().decode(payload);
+                const from = participant?.name || participant?.identity || 'Unknown';
+                this.messages.update((list) => [...list, { from, text }]);
+                return;
+            }
+
+            // file meta
+            if (topic === 'file-meta') {
+                try {
+                    const meta = JSON.parse(new TextDecoder().decode(payload)) as {
+                        id: string;
+                        name: string;
+                        size: number;
+                        type: string;
+                        total: number;
+                    };
+                    this.transfers.set(meta.id, {
+                        name: meta.name,
+                        size: meta.size,
+                        type: meta.type,
+                        total: meta.total,
+                        received: 0,
+                        chunks: [],
+                        from: participant?.name || participant?.identity || 'Unknown',
+                    });
+                } catch {}
+                return;
+            }
+
+            // file chunk
+            if (topic?.startsWith('file-chunk:')) {
+                const id = topic.split(':')[1];
+                const t = this.transfers.get(id);
+                if (!t) return; // chưa có meta
+
+                // payload là ArrayBuffer -> Uint8Array
+                const u8 = new Uint8Array(payload);
+                t.chunks.push(u8);
+                t.received++;
+
+                // đủ chunk -> ghép file
+                if (t.received >= t.total) {
+                    const blob = new Blob(t.chunks, { type: t.type || 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    this.receivedFiles.update((list) => [
+                        ...list,
+                        {
+                            id,
+                            from: t.from,
+                            name: t.name,
+                            size: t.size,
+                            type: t.type,
+                            url,
+                        },
+                    ]);
+                    this.messages.update((list) => [
+                        ...list,
+                        { from: 'Hệ thống', text: `Đã nhận tệp: ${t.name} (${Math.round(t.size / 1024)} KB)` },
+                    ]);
+                    this.transfers.delete(id);
+                }
+                return;
+            }
         });
 
-        // Remote tracks
+        // ===== Remote tracks
         room.on(
             RoomEvent.TrackSubscribed,
             (_track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) => {
@@ -132,7 +214,7 @@ export class AppComponent implements OnDestroy {
             });
         });
 
-        // Participants in/out/name change + system message
+        // ===== Participants in/out/name change + system message
         room.on(RoomEvent.ParticipantConnected, (p) => {
             const id = p.name || p.identity;
             this.participants.update((list) => Array.from(new Set([...list, id])));
@@ -153,19 +235,26 @@ export class AppComponent implements OnDestroy {
             });
         });
 
-        // Local camera published/unpublished -> đồng bộ localCamTrack signal
+        // ===== Local tracks: Camera + Microphone publish/unpublish
         room.on(RoomEvent.LocalTrackPublished, (pub) => {
             if (pub.kind === 'video' && pub.source === Track.Source.Camera) {
                 this.localCamTrack.set(pub.videoTrack as LocalVideoTrack);
                 this.isCameraOn = true;
                 this.recomputeCamShareFlags();
             }
+            if (pub.kind === 'audio' && pub.source === Track.Source.Microphone) {
+                this.isMicOn = true;
+            }
         });
+
         room.on(RoomEvent.LocalTrackUnpublished, (pub) => {
             if (pub.kind === 'video' && pub.source === Track.Source.Camera) {
                 this.localCamTrack.set(undefined);
                 this.isCameraOn = false;
                 this.recomputeCamShareFlags();
+            }
+            if (pub.kind === 'audio' && pub.source === Track.Source.Microphone) {
+                this.isMicOn = false;
             }
         });
 
@@ -183,22 +272,172 @@ export class AppComponent implements OnDestroy {
             const existing = Array.from(room.remoteParticipants.values()).map((p) => p.name || p.identity);
             this.participants.set([participantName, ...existing]);
 
-            // 4) bật cam & mic theo mong muốn của bạn
-            await room.localParticipant.setCameraEnabled(true, {
-                facingMode: 'user' as any,
-                resolution: VideoPresets.h540,
-            });
-            await room.localParticipant.setMicrophoneEnabled(true);
+            // 4) BẬT MIC TRƯỚC (có kiểm tra thiết bị & fallback)
+            await this.tryEnableMic(room);
 
-            // 5) set localCamTrack sau khi đã bật camera
+            // 5) BẬT CAM (có kiểm tra thiết bị & fallback)
+            await this.tryEnableCamera(room);
+        } catch (error: any) {
+            console.log('Error connecting:', error?.error?.errorMessage || error?.message || error);
+            await this.leaveRoom();
+        }
+    }
+
+    async sendFile(file: File) {
+        const r = this.room();
+        if (!r) return;
+
+        // đọc toàn bộ file thành ArrayBuffer
+        const buf = await file.arrayBuffer();
+        const totalChunks = Math.ceil(buf.byteLength / this.FILE_CHUNK);
+        const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+        // 1) gửi meta trước (JSON string, reliable)
+        const meta = { id, name: file.name, size: file.size, type: file.type, total: totalChunks };
+        await r.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(meta)), {
+            reliable: true,
+            topic: 'file-meta',
+        });
+
+        // 2) gửi từng chunk nhị phân
+        for (let i = 0; i < totalChunks; i++) {
+            const start = i * this.FILE_CHUNK;
+            const end = Math.min(start + this.FILE_CHUNK, buf.byteLength);
+
+            // ArrayBuffer -> Uint8Array
+            const chunk = new Uint8Array(buf.slice(start, end));
+
+            await r.localParticipant.publishData(chunk, {
+                reliable: true,
+                topic: `file-chunk:${id}`,
+            });
+        }
+
+        // thông báo local
+        this.messages.update((l) => [
+            ...l,
+            { from: 'Hệ thống', text: `Đã gửi tệp: ${file.name} (${Math.round(file.size / 1024)} KB)` },
+        ]);
+    }
+
+    pendingFile?: File;
+
+    onFilePicked(ev: Event) {
+        const input = ev.target as HTMLInputElement;
+        const file = input.files?.[0];
+        if (!file) return;
+        this.pendingFile = file;
+        // gửi ngay lập tức (hoặc bạn có thể thêm nút "Send file")
+        this.sendFile(file).finally(() => {
+            (ev.target as HTMLInputElement).value = ''; // reset input
+            this.pendingFile = undefined;
+        });
+    }
+
+    isMicOn = false;
+
+    private async tryEnableCamera(room: Room): Promise<boolean> {
+        // 1) liệt kê device
+        let devices: MediaDeviceInfo[] = [];
+        try {
+            devices = await navigator.mediaDevices.enumerateDevices();
+        } catch {
+            // một số trình duyệt cần gọi getUserMedia trước khi enumerateDevices có tên
+        }
+        const hasVideoInput = devices.some((d) => d.kind === 'videoinput');
+
+        // 2) Nếu không có webcam → bỏ qua, không bật camera
+        if (!hasVideoInput) {
+            this.messages.update((l) => [
+                ...l,
+                { from: 'Hệ thống', text: 'Không phát hiện webcam - vào phòng ở chế độ không video.' },
+            ]);
+            return false;
+        }
+
+        // 3) Thử bật với ràng buộc “nhẹ” (không đặt facingMode trên desktop)
+        const constraints = {
+            facingMode: undefined as any, // bỏ facingMode để tránh Overconstrained trên máy bàn
+            resolution: VideoPresets.h540, // có thể giảm xuống h360 nếu cần
+        };
+
+        try {
+            await room.localParticipant.setCameraEnabled(true, constraints);
             const camPub = room.localParticipant.getTrackPublication(Track.Source.Camera);
             const vt = camPub?.videoTrack as LocalVideoTrack | undefined;
             this.localCamTrack.set(vt);
             this.isCameraOn = !!vt;
             this.recomputeCamShareFlags();
-        } catch (error: any) {
-            console.log('Error connecting:', error?.error?.errorMessage || error?.message || error);
-            await this.leaveRoom();
+            return this.isCameraOn;
+        } catch (e: any) {
+            const msg = e?.error?.errorMessage || e?.message || String(e);
+            this.messages.update((l) => [
+                ...l,
+                { from: 'Hệ thống', text: `Không bật được camera: ${msg}. Sẽ tiếp tục không video.` },
+            ]);
+            // đảm bảo tắt cờ
+            this.localCamTrack.set(undefined);
+            this.isCameraOn = false;
+            this.recomputeCamShareFlags();
+            return false;
+        }
+    }
+
+    private async tryEnableMic(room: Room): Promise<boolean> {
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const hasMic = devices.some((d) => d.kind === 'audioinput');
+            if (!hasMic) {
+                this.messages.update((l) => [
+                    ...l,
+                    { from: 'Hệ thống', text: 'Không phát hiện micro - vào phòng ở chế độ mute.' },
+                ]);
+                this.isMicOn = false;
+                return false;
+            }
+        } catch {}
+
+        try {
+            await room.localParticipant.setMicrophoneEnabled(true);
+            this.isMicOn = true;
+            return true;
+        } catch (e: any) {
+            const msg = e?.error?.errorMessage || e?.message || String(e);
+            this.messages.update((l) => [...l, { from: 'Hệ thống', text: `Không bật được micro: ${msg}` }]);
+            this.isMicOn = false;
+            return false;
+        }
+    }
+
+    async toggleMic() {
+        const r = this.room();
+        if (!r) return;
+
+        try {
+            // Cách 1 (khuyến nghị): mute/unmute mà vẫn giữ publication
+            const micPub = r.localParticipant.getTrackPublication(Track.Source.Microphone);
+            const at = micPub?.audioTrack as LocalAudioTrack | undefined;
+
+            if (at) {
+                if (this.isMicOn) await at.mute();
+                else await at.unmute();
+                this.isMicOn = !this.isMicOn;
+            } else {
+                // Fallback: nếu chưa có track, bật/tắt bằng setMicrophoneEnabled
+                await r.localParticipant.setMicrophoneEnabled(!this.isMicOn);
+                this.isMicOn = !this.isMicOn;
+            }
+        } catch (e) {
+            console.error('toggleMic error', e);
+            this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Không thể đổi trạng thái micro.' }]);
+        }
+    }
+
+    @HostListener('window:keydown', ['$event'])
+    onKeydown(e: KeyboardEvent) {
+        if ((e.key === 'm' || e.key === 'M') && this.room()) {
+            e.preventDefault();
+            this.toggleMic();
         }
     }
 
