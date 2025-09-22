@@ -91,8 +91,8 @@ export class AppComponent implements OnDestroy {
     }
     private configureUrls() {
         // DÙNG IP LAN/DOMAIN khi cần test đa thiết bị
-        APPLICATION_SERVER_URL = 'http://192.168.137.1:6080/';
-        LIVEKIT_URL = 'ws://192.168.137.1:7880';
+        APPLICATION_SERVER_URL = 'http://127.0.0.1:6080/';
+        LIVEKIT_URL = 'ws://127.0.0.1:7880';
     }
 
     //region Join Room ======
