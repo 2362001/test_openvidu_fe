@@ -57,6 +57,9 @@
             <button class="btn btn-outline-warning" (click)="toggleMic()" [disabled]="!room()">
                 {{ isMicOn ? "Mute Mic" : "Unmute Mic" }}
             </button>
+            <button class="btn btn-outline-info" (click)="toggleCamera()" [disabled]="!room()">
+                {{ isCameraOn ? "Turn Camera Off" : "Turn Camera On" }}
+            </button>
             <!-- <span class="badge" [class.bg-success]="isMicOn" [class.bg-secondary]="!isMicOn">
                 Mic: {{ isMicOn ? "On" : "Muted" }}
             </span> -->

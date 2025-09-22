@@ -91,8 +91,8 @@ export class AppComponent implements OnDestroy {
     }
     private configureUrls() {
         // DÙNG IP LAN/DOMAIN khi cần test đa thiết bị
-        APPLICATION_SERVER_URL = 'http://127.0.0.1:6080/';
-        LIVEKIT_URL = 'ws://127.0.0.1:7880';
+        APPLICATION_SERVER_URL = 'http://192.168.137.1:6080/';
+        LIVEKIT_URL = 'ws://192.168.137.1:7880';
     }
 
     //region Join Room ======
@@ -894,5 +894,45 @@ export class AppComponent implements OnDestroy {
         this.recordingStream = undefined;
         this.recorder = undefined;
         this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Đã dừng ghi và tải file.' }]);
+    }
+
+    async toggleCamera() {
+        const r = this.room();
+        if (!r) return;
+
+        try {
+            // Lấy publication của camera (nếu đã có)
+            const camPub = r.localParticipant.getTrackPublication(Track.Source.Camera);
+            const vt = camPub?.videoTrack as LocalVideoTrack | undefined;
+
+            if (vt) {
+                // Đã có track camera → dùng mute/unmute để giữ publication cho mượt
+                // (tránh renegotiate không cần thiết)
+                if (this.isCameraOn) {
+                    await vt.mute(); // ngừng gửi khung hình
+                    this.isCameraOn = false;
+                    this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Đã tắt camera.' }]);
+                } else {
+                    await vt.unmute(); // gửi lại khung hình
+                    this.isCameraOn = true;
+                    this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Đã bật camera.' }]);
+                }
+                // Giữ nguyên localCamTrack để tiếp tục render video element
+                this.localCamTrack.set(vt);
+                this.recomputeCamShareFlags();
+                return;
+            }
+
+            // Chưa có track → bật camera lần đầu (dùng helper bạn đã có)
+            const ok = await this.tryEnableCamera(r);
+            if (ok) {
+                this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Đã bật camera.' }]);
+            } else {
+                this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Không bật được camera.' }]);
+            }
+        } catch (e) {
+            console.error('toggleCamera error', e);
+            this.messages.update((l) => [...l, { from: 'Hệ thống', text: 'Lỗi khi bật/tắt camera.' }]);
+        }
     }
 }

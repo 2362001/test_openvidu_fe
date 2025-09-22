@@ -161,3 +161,122 @@
         grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     }
 }
+
+/* ==== Cải thiện nút và bố cục chung ==== */
+#room-header {
+    width: 100%;
+    max-width: 1200px;
+    margin-bottom: 8px;
+}
+
+#room-header .header-actions {
+    display: flex;
+    flex-wrap: wrap; /* Cho phép xuống dòng khi chật */
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+#layout-container video {
+    width: 100%;
+    height: auto;
+    border-radius: 8px;
+    display: block;
+    background: #000; /* tránh flash trắng khi chưa có frame */
+}
+
+/* Đảm bảo thẻ video không vỡ layout khi quay dọc */
+.video-component,
+.video-container,
+.video-container.local {
+    min-width: 0; /* fix overflow trong grid */
+}
+
+/* ====== Điểm gãy cho tablet (<= 992px) đã có, giữ nguyên ====== */
+
+/* ====== Điểm gãy cho mobile (<= 768px) ====== */
+@media screen and (max-width: 768px) {
+    /* Bố cục: chat xuống dưới, ẩn theo nút */
+    #content {
+        grid-template-columns: 1fr; /* stack dọc */
+        gap: 12px;
+        padding: 0 8px;
+    }
+
+    #room {
+        align-items: stretch; /* kéo rộng full */
+        width: 100%;
+    }
+
+    #left-pane {
+        order: 1;
+    }
+
+    #chat-panel {
+        order: 2;
+        position: static; /* bỏ sticky */
+        max-height: none;
+    }
+
+    /* Thu nhỏ kích cỡ form join */
+    #join-dialog {
+        width: 92%;
+        max-width: 640px;
+        padding: 24px;
+        border-radius: 10px;
+    }
+
+    #join-dialog h2 {
+        font-size: 32px;
+        line-height: 1.2;
+    }
+
+    #join-dialog label {
+        font-size: 16px;
+        margin-bottom: 6px;
+    }
+
+    .form-control {
+        padding: 10px 12px;
+        font-size: 16px; /* tránh zoom input trên iOS */
+    }
+
+    /* Lưới video: thẻ nhỏ hơn cho màn hẹp */
+    #layout-container {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 8px;
+    }
+
+    /* Nút: giảm kích cỡ, cho phép xuống dòng */
+    .btn {
+        padding: 8px 10px;
+        font-size: 14px;
+        line-height: 1.2;
+    }
+
+    /* Chat ẩn khi chatOpen=false (đã bind class mobile-hidden) */
+    #chat-panel.mobile-hidden {
+        display: none;
+    }
+}
+
+/* ====== Điểm gãy rất nhỏ (<= 576px) ====== */
+@media screen and (max-width: 576px) {
+    #room-header .header-actions {
+        justify-content: center; /* gom nút vào giữa cho đỡ chật */
+    }
+
+    /* Lưới video: ưu tiên 1 cột khi rất hẹp */
+    #layout-container {
+        grid-template-columns: 1fr;
+    }
+
+    /* Nút lớn: chuyển chữ ngắn gọn hơn (nếu cần tự ẩn text bằng CSS) */
+    /* ví dụ: ẩn chữ dài giữ icon nếu bạn thêm icon vào sau này */
+}
+
+/* ====== Padding an toàn cho iOS tai thỏ ====== */
+@supports (padding: max(0px)) {
+    body {
+        padding-bottom: max(env(safe-area-inset-bottom), 0px);
+    }
+}
