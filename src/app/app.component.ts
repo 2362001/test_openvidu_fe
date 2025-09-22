@@ -35,41 +35,31 @@ let LIVEKIT_URL = '';
     styleUrl: './app.component.scss',
 })
 export class AppComponent implements OnDestroy {
-    // ===== Form =====
     roomForm = new FormGroup({
         roomName: new FormControl('Test Room', Validators.required),
         participantName: new FormControl('Participant' + Math.floor(Math.random() * 100), Validators.required),
     });
 
-    // ===== Signals (state) =====
     room = signal<Room | undefined>(undefined);
 
-    // IMPORTANT: luôn tạo Map mới khi update để trigger re-render
     remoteTracksMap = signal<Map<string, TrackInfo>>(new Map());
 
-    // hiển thị list tên nhanh (đơn giản) – có thể nâng cấp sang object identity/name nếu muốn
     participants = signal<string[]>([]);
 
-    // chat
     messages = signal<{ from: string; text: string }[]>([]);
     chatInput = '';
 
-    // local cam track để render chính mình
     localCamTrack = signal<LocalVideoTrack | undefined>(undefined);
 
-    // screen-share flags
     isScreenSharing = false;
     private screenShareTracks: LocalTrack[] = [];
 
-    // camera flags
     isCameraOn = false;
     camAndShare = false;
     currentFacing: 'user' | 'environment' = 'user';
 
-    // danh sách file đã nhận để hiển thị link tải
     receivedFiles = signal<{ id: string; from: string; name: string; size: number; type: string; url: string }[]>([]);
 
-    // track tiến độ gửi/nhận (tuỳ chọn, để show progress)
     transfers = new Map<
         string,
         {
@@ -83,14 +73,12 @@ export class AppComponent implements OnDestroy {
         }
     >();
 
-    // chunk size phù hợp cho DataChannel
-    private readonly FILE_CHUNK = 16 * 1024; // 16KB
+    private readonly FILE_CHUNK = 16 * 1024; 
 
     constructor(private httpClient: HttpClient) {
         this.configureUrls();
     }
     private configureUrls() {
-        // DÙNG IP LAN/DOMAIN khi cần test đa thiết bị
         APPLICATION_SERVER_URL = 'http://127.0.0.1:6080/';
         LIVEKIT_URL = 'ws://127.0.0.1:7880';
     }
@@ -355,10 +343,9 @@ export class AppComponent implements OnDestroy {
             return false;
         }
 
-        // 3) Thử bật với ràng buộc “nhẹ” (không đặt facingMode trên desktop)
         const constraints = {
-            facingMode: undefined as any, // bỏ facingMode để tránh Overconstrained trên máy bàn
-            resolution: VideoPresets.h540, // có thể giảm xuống h360 nếu cần
+            facingMode: undefined as any, 
+            resolution: VideoPresets.h540,
         };
 
         try {
@@ -414,7 +401,6 @@ export class AppComponent implements OnDestroy {
         if (!r) return;
 
         try {
-            // Cách 1 (khuyến nghị): mute/unmute mà vẫn giữ publication
             const micPub = r.localParticipant.getTrackPublication(Track.Source.Microphone);
             const at = micPub?.audioTrack as LocalAudioTrack | undefined;
 
@@ -423,7 +409,6 @@ export class AppComponent implements OnDestroy {
                 else await at.unmute();
                 this.isMicOn = !this.isMicOn;
             } else {
-                // Fallback: nếu chưa có track, bật/tắt bằng setMicrophoneEnabled
                 await r.localParticipant.setMicrophoneEnabled(!this.isMicOn);
                 this.isMicOn = !this.isMicOn;
             }
